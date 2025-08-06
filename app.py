@@ -1,36 +1,33 @@
 import streamlit as st
-import streamlit.components.v1 as components
-from datetime import datetime
 import pandas as pd
+from datetime import datetime
 import os
 
-# CSV log file
-log_file = "meal_attendance_log.csv"
+st.set_page_config(page_title="Meal Attendance Scanner", page_icon="🍽️")
 
-# Initialize CSV if not present
-if not os.path.exists(log_file):
-    df = pd.DataFrame(columns=["Timestamp", "QR_Data"])
-    df.to_csv(log_file, index=False)
+st.title("🍽️ Meal Attendance Logger")
 
-# Load log
-df = pd.read_csv(log_file)
+# Load or create CSV
+log_file = "meal_log.csv"
 
-st.set_page_config(page_title="QR Meal Scanner", page_icon="🍽️")
-st.title("🍽️ Meal Attendance QR Scanner (Streamlit Cloud)")
-st.metric("🍽️ Total Students Counted", len(df))
+if os.path.exists(log_file):
+    df = pd.read_csv(log_file)
+else:
+    df = pd.DataFrame(columns=["Student ID", "Timestamp"])
 
-# Handle scanned QR data from frontend
-qr_data = st.experimental_get_query_params().get("scanned", [None])[0]
-if qr_data:
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    new_entry = pd.DataFrame([[current_time, qr_data]], columns=["Timestamp", "QR_Data"])
-    new_entry.to_csv(log_file, mode="a", header=False, index=False)
-    st.success(f"✅ Scanned and logged: {qr_data}")
-    st.experimental_set_query_params(scanned=None)
+# Student input
+student_id = st.text_input("Enter your Student ID")
 
-# Load the HTML QR scanner
-with open("qr_component.html", "r") as f:
-    html_content = f.read()
+if st.button("Submit"):
+    if student_id.strip() != "":
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        new_entry = pd.DataFrame([[student_id, timestamp]], columns=["Student ID", "Timestamp"])
+        df = pd.concat([df, new_entry], ignore_index=True)
+        df.to_csv(log_file, index=False)
+        st.success(f"✅ {student_id} logged at {timestamp}")
+    else:
+        st.warning("Please enter a valid Student ID")
 
-components.html(html_content, height=600)
+# Display total count
+st.metric("Total Entries", len(df))
 
