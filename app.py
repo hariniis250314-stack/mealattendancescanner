@@ -44,5 +44,16 @@ if st.button("Submit"):
 # Display total count
 st.metric("Total Entries", len(df))
 
+# Add download button for Excel log
+if not df.empty:
+    with open(log_file, "rb") as file:
+        btn = st.download_button(
+            label="📥 Download Meal Log (Excel)",
+            data=file,
+            file_name="meal_log.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+
 
 
