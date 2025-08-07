@@ -1,58 +1,75 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, time
 import os
 
+# --- Page Config ---
 st.set_page_config(page_title="Meal Attendance Scanner", page_icon="🍽️")
 st.title("🍽️ Meal Attendance Logger")
 
-# Load master list
-students_df = pd.read_csv("students.csv")
-
-# Excel log file
+# --- Reset Daily Log After 11PM ---
+reset_time = time(23, 0)
+now = datetime.now()
 log_file = "meal_log.xlsx"
 
-# Load existing log or create new DataFrame
+if now.time() >= reset_time and os.path.exists(log_file):
+    os.remove(log_file)
+
+# --- Load Master Student List ---
+students_df = pd.read_csv("students.csv")  # Must exist in the same folder
+
+# --- Load or Create Log File ---
 if os.path.exists(log_file):
     df = pd.read_excel(log_file)
 else:
     df = pd.DataFrame(columns=["Student ID", "Name", "Date", "Time"])
 
-# Input field
+# --- Input Section ---
 student_id = st.text_input("Enter your Student ID")
 
 if st.button("Submit"):
     student_id = student_id.strip()
-    match = students_df[students_df["StudentID"] == student_id]
+    if student_id != "":
+        # Match ID
+        match = students_df[students_df["Student ID"] == student_id]
+        if not match.empty:
+            student_name = match["Name"].values[0]
+            current_date = now.strftime("%Y-%m-%d")
+            current_time = now.strftime("%H:%M:%S")
 
-    if not match.empty:
-        name = match.iloc[0]["Name"]
-        now = datetime.now()
-        date = now.strftime("%Y-%m-%d")
-        time = now.strftime("%I:%M %p")
+            new_entry = pd.DataFrame([[student_id, student_name, current_date, current_time]],
+                                     columns=["Student ID", "Name", "Date", "Time"])
+            df = pd.concat([df, new_entry], ignore_index=True)
+            df.to_excel(log_file, index=False)
 
-        new_entry = pd.DataFrame([[student_id, name, date, time]],
-                                 columns=["Student ID", "Name", "Date", "Time"])
-
-        df = pd.concat([df, new_entry], ignore_index=True)
-        df.to_excel(log_file, index=False)
-
-        st.success(f"✅ {name} ({student_id}) logged at {time} on {date}")
+            st.success(f"✅ {student_name} ({student_id}) logged at {current_time} on {current_date}")
+        else:
+            st.error("❌ Student ID not found in master list.")
     else:
-        st.error("❌ Student ID not found in master list.")
+        st.warning("Please enter a valid Student ID.")
 
-# Display total count
+# --- Display Total Entries ---
 st.metric("Total Entries", len(df))
 
-# Add download button for Excel log
-if not df.empty:
-    with open(log_file, "rb") as file:
-        btn = st.download_button(
-            label="📥 Download Meal Log (Excel)",
-            data=file,
-            file_name="meal_log.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+# --- Admin Access Section ---
+st.markdown("---")
+with st.expander("🔐 Admin Login"):
+    admin_pass = st.text_input("Enter admin password", type="password")
+    if admin_pass == "admin123":  # Change this to a secure password
+        st.success("Welcome, Admin ✅")
+
+        if not df.empty:
+            with open(log_file, "rb") as file:
+                st.download_button(
+                    label="📥 Download Meal Log (Excel)",
+                    data=file,
+                    file_name="meal_log.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        else:
+            st.warning("No entries found in the log.")
+    elif admin_pass != "":
+        st.error("Incorrect password ❌")
 
 
 
