@@ -70,6 +70,23 @@ with st.expander("🔐 Admin Login"):
             st.warning("No entries found in the log.")
     elif admin_pass != "":
         st.error("Incorrect password ❌")
+with st.expander("🔐 Admin Login"):
+    admin_pass = st.text_input("Enter admin password", type="password")
+    if admin_pass == "admin123":
+        st.success("Welcome, Admin ✅")
+
+        if st.button("🔁 Refresh Log View"):
+            st.experimental_rerun()
+
+        if not df.empty:
+            with open(log_file, "rb") as file:
+                st.download_button(
+                    label="📥 Download Meal Log (Excel)",
+                    data=file,
+                    file_name="meal_log.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
 
 
 
