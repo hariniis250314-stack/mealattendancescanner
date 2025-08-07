@@ -4,30 +4,45 @@ from datetime import datetime
 import os
 
 st.set_page_config(page_title="Meal Attendance Scanner", page_icon="🍽️")
-
 st.title("🍽️ Meal Attendance Logger")
 
-# Load or create CSV
-log_file = "meal_log.csv"
+# Load master list
+students_df = pd.read_csv("students.csv")
 
+# Excel log file
+log_file = "meal_log.xlsx"
+
+# Load existing log or create new DataFrame
 if os.path.exists(log_file):
-    df = pd.read_csv(log_file)
+    df = pd.read_excel(log_file)
 else:
-    df = pd.DataFrame(columns=["Student ID", "Timestamp"])
+    df = pd.DataFrame(columns=["Student ID", "Name", "Date", "Time"])
 
-# Student input
+# Input field
 student_id = st.text_input("Enter your Student ID")
 
 if st.button("Submit"):
-    if student_id.strip() != "":
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        new_entry = pd.DataFrame([[student_id, timestamp]], columns=["Student ID", "Timestamp"])
+    student_id = student_id.strip()
+    match = students_df[students_df["StudentID"] == student_id]
+
+    if not match.empty:
+        name = match.iloc[0]["Name"]
+        now = datetime.now()
+        date = now.strftime("%Y-%m-%d")
+        time = now.strftime("%I:%M %p")
+
+        new_entry = pd.DataFrame([[student_id, name, date, time]],
+                                 columns=["Student ID", "Name", "Date", "Time"])
+
         df = pd.concat([df, new_entry], ignore_index=True)
-        df.to_csv(log_file, index=False)
-        st.success(f"✅ {student_id} logged at {timestamp}")
+        df.to_excel(log_file, index=False)
+
+        st.success(f"✅ {name} ({student_id}) logged at {time} on {date}")
     else:
-        st.warning("Please enter a valid Student ID")
+        st.error("❌ Student ID not found in master list.")
 
 # Display total count
 st.metric("Total Entries", len(df))
+
+
 
