@@ -27,7 +27,7 @@ else:
 
 # Time restriction: Only allow between 8:00 PM and 9:30 PM
 current_time = datetime.now().time()
-start_time = datetime.strptime("20:00", "%H:%M").time()
+start_time = datetime.strptime("17:00", "%H:%M").time()
 end_time = datetime.strptime("21:30", "%H:%M").time()
 
 if start_time <= current_time <= end_time:
@@ -64,3 +64,4 @@ else:
 # Show total count
 st.metric("Total Entries Today",
           len(log_df[pd.to_datetime(log_df["Timestamp"]).dt.date == datetime.now().date()]))
+
