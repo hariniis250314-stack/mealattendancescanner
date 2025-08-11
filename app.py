@@ -1,77 +1,117 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, time
+from datetime import datetime
 import os
 
-# --- Page Config ---
 st.set_page_config(page_title="Meal Attendance Scanner", page_icon="🍽️")
 st.title("🍽️ Meal Attendance Logger")
 
-# --- Reset Daily Log After 11PM ---
-reset_time = time(23, 0)
-now = datetime.now()
+# ---------- Helpers ----------
+def normalize(s: str) -> str:
+    return s.strip().lower().replace(" ", "").replace("_", "")
+
+def auto_find_columns(df: pd.DataFrame):
+    # drop stray index columns like "Unnamed: 0"
+    clean_df = df.loc[:, ~df.columns.str.contains(r"^unnamed", case=False)]
+    # build map: normalized -> original
+    norm_map = {normalize(c): c for c in clean_df.columns}
+
+    # try common variants
+    id_candidates = ["studentid", "id", "rollno", "rollnumber"]
+    name_candidates = ["name", "studentname", "fullname"]
+
+    id_col = next((norm_map[n] for n in id_candidates if n in norm_map), None)
+    name_col = next((norm_map[n] for n in name_candidates if n in norm_map), None)
+    return clean_df, id_col, name_col
+
+# ---------- Load master list ----------
+try:
+    students_raw = pd.read_csv("students.csv", dtype=str)
+except FileNotFoundError:
+    st.error("❌ `students.csv` not found. Place it next to `app.py` and redeploy.")
+    st.stop()
+except Exception as e:
+    st.error(f"❌ Failed to read `students.csv`: {e}")
+    st.stop()
+
+students_df, id_col, name_col = auto_find_columns(students_raw)
+
+if id_col is None or name_col is None:
+    st.error(
+        "❌ Could not find required columns in `students.csv`.\n\n"
+        "Expected headers similar to:\n"
+        "- ID column: StudentID / ID / RollNo / RollNumber\n"
+        "- Name column: Name / StudentName / FullName\n\n"
+        f"Detected columns: {list(students_raw.columns)}"
+    )
+    st.stop()
+
+# ---------- Load or create log file ----------
 log_file = "meal_log.xlsx"
-
-if now.time() >= reset_time and os.path.exists(log_file):
-    os.remove(log_file)
-
-# --- Load Master Student List ---
-students_df = pd.read_csv("students.csv")  # Must exist in the same folder
-
-# --- Load or Create Log File ---
 if os.path.exists(log_file):
-    df = pd.read_excel(log_file)
+    try:
+        df = pd.read_excel(log_file, dtype=str)
+    except Exception:
+        df = pd.DataFrame(columns=["Student ID", "Name", "Date", "Time"])
 else:
     df = pd.DataFrame(columns=["Student ID", "Name", "Date", "Time"])
 
-# --- Input Section ---
+# ---------- Input ----------
 student_id = st.text_input("Enter your Student ID")
 
 if st.button("Submit"):
-    student_id = student_id.strip()
-    if student_id != "":
-        # Match ID
-        match = students_df[students_df["Student ID"] == student_id]
+    sid = (student_id or "").strip()
+    if not sid:
+        st.warning("Please enter a valid Student ID.")
+    else:
+        # case-insensitive match after stripping
+        match = students_df[
+            students_df[id_col].astype(str).str.strip().str.upper() == sid.upper()
+        ]
         if not match.empty:
-            student_name = match["Name"].values[0]
-            current_date = now.strftime("%Y-%m-%d")
-            current_time = now.strftime("%H:%M:%S")
+            student_name = match[name_col].iloc[0]
+            now = datetime.now()
+            date_str = now.strftime("%Y-%m-%d")
+            time_str = now.strftime("%H:%M:%S")
 
-            new_entry = pd.DataFrame([[student_id, student_name, current_date, current_time]],
-                                     columns=["Student ID", "Name", "Date", "Time"])
-            df = pd.concat([df, new_entry], ignore_index=True)
-            df.to_excel(log_file, index=False)
-
-            st.success(f"✅ {student_name} ({student_id}) logged at {current_time} on {current_date}")
+            new_row = pd.DataFrame(
+                [[sid, student_name, date_str, time_str]],
+                columns=["Student ID", "Name", "Date", "Time"]
+            )
+            df = pd.concat([df, new_row], ignore_index=True)
+            # write Excel
+            try:
+                df.to_excel(log_file, index=False)
+            except Exception as e:
+                st.error(f"❌ Failed to write log file: {e}")
+            else:
+                st.success(f"✅ {student_name} ({sid}) logged at {time_str} on {date_str}")
         else:
             st.error("❌ Student ID not found in master list.")
-    else:
-        st.warning("Please enter a valid Student ID.")
 
-# --- Display Total Entries ---
+# ---------- Summary ----------
 st.metric("Total Entries", len(df))
 
-# --- Admin Access Section ---
+# ---------- Admin (password-protected download) ----------
 st.markdown("---")
 with st.expander("🔐 Admin Login"):
-    admin_pass = st.text_input("Enter admin password", type="password")
-    if admin_pass == "admin123":  # Change this to a secure password
+    admin_pass = st.text_input("Enter admin password", type="password", key="admin_password")
+    # TIP: replace hardcoded password with an environment secret in production
+    if admin_pass == "admin123":
         st.success("Welcome, Admin ✅")
-
-        if not df.empty:
-            with open(log_file, "rb") as file:
+        if not df.empty and os.path.exists(log_file):
+            with open(log_file, "rb") as f:
                 st.download_button(
                     label="📥 Download Meal Log (Excel)",
-                    data=file,
+                    data=f,
                     file_name="meal_log.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_log_xlsx"
                 )
         else:
-            st.warning("No entries found in the log.")
-    elif admin_pass != "":
+            st.warning("No entries found yet.")
+    elif admin_pass:
         st.error("Incorrect password ❌")
-
-
 
 
 
