@@ -91,19 +91,24 @@ if st.button("Submit"):
 
 # ---------- Summary ----------
 st.metric("Total Entries", len(df))
-
-# ---------- Admin (password-protected download) ----------
+# --- Admin Access Section ---
 st.markdown("---")
 with st.expander("🔐 Admin Login"):
     admin_pass = st.text_input("Enter admin password", type="password", key="admin_password")
-    # TIP: replace hardcoded password with an environment secret in production
-    if admin_pass == "admin123":
+
+    if admin_pass == "admin123":  # ← change to a secure password / use secrets in prod
         st.success("Welcome, Admin ✅")
+
+        # Admin-only refresh button
+        if st.button("🔁 Refresh entries", key="admin_refresh"):
+            st.rerun()
+
+        # Admin-only download
         if not df.empty and os.path.exists(log_file):
-            with open(log_file, "rb") as f:
+            with open(log_file, "rb") as file:
                 st.download_button(
                     label="📥 Download Meal Log (Excel)",
-                    data=f,
+                    data=file,
                     file_name="meal_log.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="dl_log_xlsx"
@@ -112,7 +117,3 @@ with st.expander("🔐 Admin Login"):
             st.warning("No entries found yet.")
     elif admin_pass:
         st.error("Incorrect password ❌")
-
-
-
-
