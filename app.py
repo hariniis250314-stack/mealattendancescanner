@@ -10,7 +10,7 @@ st.title("🍽️ Meal Attendance Logger")
 
 MASTER_FILE = "GMS Trainees list.xlsx"   # put the exact Excel filename here
 LOG_FILE = "meal_log.xlsx"
-ADMIN_PASSWORD = "admin123"              # change or use Streamlit Secrets
+ADMIN_PASSWORD = "cteagms25"              # change or use Streamlit Secrets
 
 # ---------- Helpers ----------
 def _norm(s: str) -> str:
@@ -173,4 +173,5 @@ with st.expander("🔐 Admin Login"):
             st.warning("No entries found yet.")
     elif admin_pass:
         st.error("Incorrect password ❌")
+
 
