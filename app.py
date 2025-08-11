@@ -3,18 +3,20 @@ import pandas as pd
 from datetime import datetime
 import os
 
-# ------------ Config ------------
+# ---------------- Page config ----------------
 st.set_page_config(page_title="Meal Attendance Scanner", page_icon="🍽️")
 st.title("🍽️ Meal Attendance Logger")
 
 LOG_FILE = "meal_log.xlsx"
-ADMIN_PASSWORD = "admin123"  # change or use secrets in production
+ADMIN_PASSWORD = "admin123"  # ⚠️ Change this (or use Streamlit Secrets in production)
 
-# ------------ Helpers ------------
+# ---------------- Helpers ----------------
 def _normalize(s: str) -> str:
     return s.strip().lower().replace(" ", "").replace("_", "")
 
 def _auto_find_columns(df: pd.DataFrame):
+    """Find likely ID and Name columns (handles StudentID/ID and Name/FullName variants)."""
+    # drop stray "Unnamed" index columns if any
     df = df.loc[:, ~df.columns.str.contains(r"^unnamed", case=False)]
     norm_map = {_normalize(c): c for c in df.columns}
     id_candidates = ["studentid", "id", "rollno", "rollnumber"]
@@ -26,7 +28,7 @@ def _auto_find_columns(df: pd.DataFrame):
 def file_mtime(path: str) -> float:
     return os.path.getmtime(path) if os.path.exists(path) else 0.0
 
-# ------------ Cached loaders keyed by file mtime ------------
+# ---------------- Cached loaders keyed by file mtime ----------------
 @st.cache_data(show_spinner=False)
 def load_students_cached(mtime: float):
     raw = pd.read_csv("students.csv", dtype=str)
@@ -39,24 +41,33 @@ def load_log_cached(path: str, mtime: float) -> pd.DataFrame:
         return pd.read_excel(path, dtype=str)
     return pd.DataFrame(columns=["Student ID", "Name", "Date", "Time"])
 
-# bump counter used to force re-keying if needed
-if "refresh_bump" not in st.session_state:
-    st.session_state.refresh_bump = 0
+# invisible bump to force cache re-key after writes (no refresh button)
+if "cache_bump" not in st.session_state:
+    st.session_state.cache_bump = 0
 
-# ------------ Load data (students + log) ------------
-students_df, ID_COL, NAME_COL = load_students_cached(file_mtime("students.csv") + st.session_state.refresh_bump)
+# ---------------- Load data ----------------
+try:
+    students_df, ID_COL, NAME_COL = load_students_cached(
+        file_mtime("students.csv") + st.session_state.cache_bump
+    )
+except FileNotFoundError:
+    st.error("❌ `students.csv` not found. Place it next to `app.py` and redeploy.")
+    st.stop()
+except Exception as e:
+    st.error(f"❌ Failed to read `students.csv`: {e}")
+    st.stop()
 
 if ID_COL is None or NAME_COL is None:
     st.error(
-        "❌ Could not detect required columns in `students.csv`.\n"
-        "Expected headers like: StudentID/ID/RollNo and Name/StudentName/FullName.\n\n"
-        f"Detected: {list(students_df.columns)}"
+        "❌ Could not detect required columns in `students.csv`.\n\n"
+        "Expected headers like: StudentID / ID / RollNo  and  Name / StudentName / FullName.\n\n"
+        f"Detected columns: {list(students_df.columns)}"
     )
     st.stop()
 
-df = load_log_cached(LOG_FILE, file_mtime(LOG_FILE) + st.session_state.refresh_bump)
+df = load_log_cached(LOG_FILE, file_mtime(LOG_FILE) + st.session_state.cache_bump)
 
-# ------------ Input ------------
+# ---------------- Input ----------------
 student_id = st.text_input("Enter your Student ID", key="student_input")
 
 if st.button("Submit", key="submit_btn"):
@@ -84,32 +95,23 @@ if st.button("Submit", key="submit_btn"):
             except Exception as e:
                 st.error(f"❌ Failed to write log file: {e}")
             else:
-                # Invalidate cache by bumping and rerunning
-                st.session_state.refresh_bump += 1
+                # bump cache key & rerun so UI reflects the latest file immediately
+                st.session_state.cache_bump += 1
                 st.success(f"✅ {student_name} ({sid}) logged at {time_str} on {date_str}")
                 st.rerun()
         else:
             st.error("❌ Student ID not found in master list.")
 
-# ------------ Summary + (optional) quick peek ------------
+# ---------------- Summary ----------------
+df = load_log_cached(LOG_FILE, file_mtime(LOG_FILE) + st.session_state.cache_bump)
 st.metric("Total Entries", len(df))
-# Uncomment to show a small preview to everyone:
-# st.dataframe(df.tail(10), use_container_width=True)
 
-# ------------ Admin Section ------------
+# ---------------- Admin Section (download only) ----------------
 st.markdown("---")
 with st.expander("🔐 Admin Login"):
     admin_pass = st.text_input("Enter admin password", type="password", key="admin_password")
     if admin_pass == ADMIN_PASSWORD:
         st.success("Welcome, Admin ✅")
-
-        # Admin-only Refresh: re-key caches and rerun
-        if st.button("🔁 Refresh entries", key="admin_refresh"):
-            st.session_state.refresh_bump += 1
-            st.rerun()
-
-        # Re-load after a potential refresh to ensure newest data
-        df = load_log_cached(LOG_FILE, file_mtime(LOG_FILE) + st.session_state.refresh_bump)
 
         if not df.empty and os.path.exists(LOG_FILE):
             with open(LOG_FILE, "rb") as f:
