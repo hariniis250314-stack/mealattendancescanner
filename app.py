@@ -16,7 +16,6 @@ def _normalize(s: str) -> str:
 
 def _auto_find_columns(df: pd.DataFrame):
     """Find likely ID and Name columns (handles StudentID/ID and Name/FullName variants)."""
-    # drop stray "Unnamed" index columns if any
     df = df.loc[:, ~df.columns.str.contains(r"^unnamed", case=False)]
     norm_map = {_normalize(c): c for c in df.columns}
     id_candidates = ["studentid", "id", "rollno", "rollnumber"]
@@ -41,7 +40,7 @@ def load_log_cached(path: str, mtime: float) -> pd.DataFrame:
         return pd.read_excel(path, dtype=str)
     return pd.DataFrame(columns=["Student ID", "Name", "Date", "Time"])
 
-# invisible bump to force cache re-key after writes (no refresh button)
+# invisible bump to force cache re-key after writes
 if "cache_bump" not in st.session_state:
     st.session_state.cache_bump = 0
 
@@ -75,6 +74,7 @@ if st.button("Submit", key="submit_btn"):
     if not sid:
         st.warning("Please enter a valid Student ID.")
     else:
+        # Lookup student
         match = students_df[
             students_df[ID_COL].astype(str).str.strip().str.upper() == sid.upper()
         ]
@@ -84,21 +84,43 @@ if st.button("Submit", key="submit_btn"):
             date_str = now.strftime("%Y-%m-%d")
             time_str = now.strftime("%H:%M:%S")
 
-            new_row = pd.DataFrame(
-                [[sid, student_name, date_str, time_str]],
-                columns=["Student ID", "Name", "Date", "Time"]
-            )
-            df = pd.concat([df, new_row], ignore_index=True)
-
-            try:
-                df.to_excel(LOG_FILE, index=False)
-            except Exception as e:
-                st.error(f"❌ Failed to write log file: {e}")
+            # ---- DUPLICATE GUARD: only one entry per student per day ----
+            if not df.empty:
+                already = df[
+                    (df["Student ID"].astype(str).str.upper() == sid.upper()) &
+                    (df["Date"] == date_str)
+                ]
+                if not already.empty:
+                    st.error("⚠️ You have already been logged for today.")
+                else:
+                    new_row = pd.DataFrame(
+                        [[sid, student_name, date_str, time_str]],
+                        columns=["Student ID", "Name", "Date", "Time"]
+                    )
+                    df = pd.concat([df, new_row], ignore_index=True)
+                    try:
+                        df.to_excel(LOG_FILE, index=False)
+                    except Exception as e:
+                        st.error(f"❌ Failed to write log file: {e}")
+                    else:
+                        st.session_state.cache_bump += 1
+                        st.success(f"✅ {student_name} ({sid}) logged at {time_str} on {date_str}")
+                        st.rerun()
             else:
-                # bump cache key & rerun so UI reflects the latest file immediately
-                st.session_state.cache_bump += 1
-                st.success(f"✅ {student_name} ({sid}) logged at {time_str} on {date_str}")
-                st.rerun()
+                # first row of the day/file
+                new_row = pd.DataFrame(
+                    [[sid, student_name, date_str, time_str]],
+                    columns=["Student ID", "Name", "Date", "Time"]
+                )
+                df = pd.concat([df, new_row], ignore_index=True)
+                try:
+                    df.to_excel(LOG_FILE, index=False)
+                except Exception as e:
+                    st.error(f"❌ Failed to write log file: {e}")
+                else:
+                    st.session_state.cache_bump += 1
+                    st.success(f"✅ {student_name} ({sid}) logged at {time_str} on {date_str}")
+                    st.rerun()
         else:
             st.error("❌ Student ID not found in master list.")
 
@@ -112,7 +134,6 @@ with st.expander("🔐 Admin Login"):
     admin_pass = st.text_input("Enter admin password", type="password", key="admin_password")
     if admin_pass == ADMIN_PASSWORD:
         st.success("Welcome, Admin ✅")
-
         if not df.empty and os.path.exists(LOG_FILE):
             with open(LOG_FILE, "rb") as f:
                 st.download_button(
@@ -126,6 +147,3 @@ with st.expander("🔐 Admin Login"):
             st.warning("No entries found yet.")
     elif admin_pass:
         st.error("Incorrect password ❌")
-
-
-
