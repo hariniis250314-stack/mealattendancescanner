@@ -67,5 +67,114 @@ def filter_old_entries(df: pd.DataFrame) -> pd.DataFrame:
     # If current time is after 7 PM
     if now.time() >= time(19, 0):
         # Show only today's entries after 7 PM
-        mask = (
+        mask = (df["DateTime"].dt.strftime("%Y-%m-%d") == today_str) & (df["DateTime"].dt.time >= time(19, 0))
+        filtered_df = df[mask]
+
+    # If between midnight and 10 AM
+    elif now.time() <= time(10, 0):
+        yesterday_str = (now - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        mask_yesterday = (df["DateTime"].dt.strftime("%Y-%m-%d") == yesterday_str) & (df["DateTime"].dt.time >= time(19, 0))
+        mask_today = (df["DateTime"].dt.strftime("%Y-%m-%d") == today_str) & (df["DateTime"].dt.time <= time(10, 0))
+        filtered_df = df[mask_yesterday | mask_today]
+
+    # Drop helper column
+    filtered_df = filtered_df.drop(columns=["DateTime"], errors="ignore")
+    return filtered_df
+
+# ---------- Load master ----------
+if not os.path.exists(MASTER_FILE):
+    st.error(f"❌ Master file not found: `{MASTER_FILE}`. Upload it next to `app.py` and redeploy.")
+    st.stop()
+
+master_raw = load_master(MASTER_FILE, file_mtime(MASTER_FILE) + st.session_state.get("cache_bump", 0))
+master_df, NAME_COL, PHONE_COL = _auto_find_columns(master_raw)
+
+if NAME_COL is None or PHONE_COL is None:
+    st.error(
+        "❌ Could not detect required columns in the master file.\n"
+        "Expected a *name* and a *phone* column."
+    )
+    st.stop()
+
+# Prepare last4
+master_df["__digits__"] = master_df[PHONE_COL].map(_digits_only)
+master_df["__last4__"]  = master_df["__digits__"].apply(lambda x: x[-4:] if len(x) >= 4 else "")
+
+# ---------- Load log ----------
+df = load_log(LOG_FILE, file_mtime(LOG_FILE) + st.session_state.get("cache_bump", 0))
+
+# ---------- Input ----------
+last4 = st.text_input("Enter LAST 4 digits of your phone number", max_chars=4)
+
+if st.button("Submit"):
+    code = (last4 or "").strip()
+    if not (len(code) == 4 and code.isdigit()):
+        st.warning("Please enter exactly 4 digits.")
+    else:
+        matches = master_df[master_df["__last4__"] == code]
+
+        if matches.empty:
+            st.error("❌ No trainee found with those last 4 digits.")
+        elif len(matches) == 1:
+            trainee_name = str(matches[NAME_COL].iloc[0]).strip()
+            now = datetime.now(IST)
+            date_str = now.strftime("%Y-%m-%d")
+            time_str = now.strftime("%H:%M:%S")
+
+            dup = df[(df["Name"].str.strip().str.lower() == trainee_name.lower()) & (df["Date"] == date_str)]
+            if not dup.empty:
+                st.error("⚠️ You have already been logged for today.")
+            else:
+                new_row = pd.DataFrame([[code, trainee_name, date_str, time_str]], columns=["Last4", "Name", "Date", "Time"])
+                df = pd.concat([df, new_row], ignore_index=True)
+                save_log(df)
+                st.session_state["cache_bump"] = st.session_state.get("cache_bump", 0) + 1
+                st.success(f"✅ {trainee_name} logged at {time_str} on {date_str}")
+                st.rerun()
+
+        else:
+            st.warning("Multiple trainees share these last 4 digits. Please confirm your name.")
+            options = matches[NAME_COL].astype(str).dropna().unique().tolist()
+            chosen = st.selectbox("Select your name", options)
+            if st.button("Confirm", key="confirm_btn"):
+                trainee_name = chosen.strip()
+                now = datetime.now(IST)
+                date_str = now.strftime("%Y-%m-%d")
+                time_str = now.strftime("%H:%M:%S")
+
+                dup = df[(df["Name"].str.strip().str.lower() == trainee_name.lower()) & (df["Date"] == date_str)]
+                if not dup.empty:
+                    st.error("⚠️ You have already been logged for today.")
+                else:
+                    new_row = pd.DataFrame([[code, trainee_name, date_str, time_str]], columns=["Last4", "Name", "Date", "Time"])
+                    df = pd.concat([df, new_row], ignore_index=True)
+                    save_log(df)
+                    st.session_state["cache_bump"] = st.session_state.get("cache_bump", 0) + 1
+                    st.success(f"✅ {trainee_name} logged at {time_str} on {date_str}")
+                    st.rerun()
+
+# ---------- Summary ----------
+df = load_log(LOG_FILE, file_mtime(LOG_FILE) + st.session_state.get("cache_bump", 0))
+st.metric("Total Entries Today", len(df[df["Date"] == datetime.now(IST).strftime("%Y-%m-%d")]))
+
+# ---------- Admin ----------
+st.markdown("---")
+with st.expander("🔐 Admin Login"):
+    admin_pass = st.text_input("Enter admin password", type="password")
+    if admin_pass == ADMIN_PASSWORD:
+        st.success("Welcome, Admin ✅")
+        filtered_log = filter_old_entries(df)
+        if not filtered_log.empty:
+            st.dataframe(filtered_log)
+            with open(LOG_FILE, "rb") as f:
+                st.download_button(
+                    label="📥 Download Meal Log (Excel)",
+                    data=f,
+                    file_name="meal_log.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        else:
+            st.warning("No entries found in allowed time range.")
+    elif admin_pass:
+        st.error("Incorrect password ❌")
 
