@@ -1,6 +1,6 @@
+from datetime import datetime, timedelta
 import streamlit as st
 import pandas as pd
-from datetime import datetime
 import os
 import re
 
@@ -8,9 +8,9 @@ import re
 st.set_page_config(page_title="Meal Attendance Scanner", page_icon="🍽️")
 st.title("🍽️ Meal Attendance Logger")
 
-MASTER_FILE = "GMS Trainees list.xlsx"   # put the exact Excel filename here
+MASTER_FILE = "GMS Trainees list.xlsx"
 LOG_FILE = "meal_log.xlsx"
-ADMIN_PASSWORD = "cteagms25"              # change or use Streamlit Secrets
+ADMIN_PASSWORD = "cteagms25"
 
 # ---------- Helpers ----------
 def _norm(s: str) -> str:
@@ -20,67 +20,56 @@ def _digits_only(s) -> str:
     return re.sub(r"\D", "", str(s)) if pd.notna(s) else ""
 
 def _auto_find_columns(df: pd.DataFrame):
-    """Find likely Name and Phone columns. Returns (df_clean, name_col, phone_col)."""
-    # drop stray Unnamed index cols
     df = df.loc[:, ~df.columns.str.contains(r"^unnamed", case=False)]
     norm_map = {_norm(c): c for c in df.columns}
-
-    name_candidates  = ["name", "studentname", "fullname", "traineename"]
+    name_candidates = ["name", "studentname", "fullname", "traineename"]
     phone_candidates = ["phone", "phonenumber", "mobile", "mobilenumber", "contact", "contactnumber", "number"]
-
-    name_col  = next((norm_map[n] for n in name_candidates  if n in norm_map), None)
+    name_col = next((norm_map[n] for n in name_candidates if n in norm_map), None)
     phone_col = next((norm_map[n] for n in phone_candidates if n in norm_map), None)
     return df, name_col, phone_col
 
 @st.cache_data(show_spinner=False)
-def load_master(path: str, mtime: float) -> pd.DataFrame:
-    # Try Excel first (your case), then CSV fallback
+def load_master(path: str) -> pd.DataFrame:
     if path.lower().endswith((".xlsx", ".xls")):
         return pd.read_excel(path, dtype=str)
     return pd.read_csv(path, dtype=str)
 
-def file_mtime(path: str) -> float:
-    return os.path.getmtime(path) if os.path.exists(path) else 0.0
-
-@st.cache_data(show_spinner=False)
-def load_log(path: str, mtime: float) -> pd.DataFrame:
+def load_log(path: str) -> pd.DataFrame:
     if os.path.exists(path):
         return pd.read_excel(path, dtype=str)
     return pd.DataFrame(columns=["Last4", "Name", "Date", "Time"])
 
-# invisible bump to force re-keying cache after we write
-if "cache_bump" not in st.session_state:
-    st.session_state.cache_bump = 0
+def save_log(df: pd.DataFrame, path: str):
+    df.to_excel(path, index=False)
 
 # ---------- Load master ----------
 if not os.path.exists(MASTER_FILE):
-    st.error(f"❌ Master file not found: `{MASTER_FILE}`. Upload it next to `app.py` and redeploy.")
+    st.error(f"❌ Master file not found: `{MASTER_FILE}`.")
     st.stop()
 
-try:
-    master_raw = load_master(MASTER_FILE, file_mtime(MASTER_FILE) + st.session_state.cache_bump)
-except Exception as e:
-    st.error(f"❌ Failed to read `{MASTER_FILE}`: {e}")
-    st.stop()
-
+master_raw = load_master(MASTER_FILE)
 master_df, NAME_COL, PHONE_COL = _auto_find_columns(master_raw)
 
 if NAME_COL is None or PHONE_COL is None:
-    st.error(
-        "❌ Could not detect required columns in the master file.\n\n"
-        "Expected a *name* column like: Name / StudentName / FullName / TraineeName\n"
-        "and a *phone* column like: Phone / PhoneNumber / Mobile / ContactNumber.\n\n"
-        f"Detected columns: {list(master_raw.columns)}"
-    )
+    st.error("❌ Could not detect Name or Phone column in master file.")
     st.stop()
 
-# Prepare last4
-master_df = master_df.copy()
 master_df["__digits__"] = master_df[PHONE_COL].map(_digits_only)
-master_df["__last4__"]  = master_df["__digits__"].apply(lambda x: x[-4:] if len(x) >= 4 else "")
+master_df["__last4__"] = master_df["__digits__"].apply(lambda x: x[-4:] if len(x) >= 4 else "")
 
-# ---------- Load log ----------
-df = load_log(LOG_FILE, file_mtime(LOG_FILE) + st.session_state.cache_bump)
+# ---------- Time-based clearing ----------
+now = datetime.now()
+log_df = load_log(LOG_FILE)
+
+# Define time windows
+today_7pm = now.replace(hour=19, minute=0, second=0, microsecond=0)
+today_10am = now.replace(hour=10, minute=0, second=0, microsecond=0)
+yesterday_7pm = (today_7pm - timedelta(days=1))
+
+# Clear old entries if after 10AM and log contains older than yesterday 7PM
+if now > today_10am:
+    log_df = log_df[~pd.to_datetime(log_df["Date"] + " " + log_df["Time"]).lt(today_7pm)]
+    save_log(log_df, LOG_FILE)
 
 # ---------- Input ----------
 last4 = st.text_input("Enter LAST 4 digits of your phone number", max_chars=4)
@@ -91,87 +80,67 @@ if st.button("Submit"):
         st.warning("Please enter exactly 4 digits.")
     else:
         matches = master_df[master_df["__last4__"] == code]
-
         if matches.empty:
-            st.error("❌ No trainee found with those last 4 digits. Please try again.")
+            st.error("❌ No trainee found with those last 4 digits.")
         elif len(matches) == 1:
-            # Single match – proceed
             trainee_name = str(matches[NAME_COL].iloc[0]).strip()
-            now = datetime.now()
             date_str = now.strftime("%Y-%m-%d")
             time_str = now.strftime("%H:%M:%S")
 
-            # Duplicate guard: one entry per day per person (by name + date)
-            dup = df[(df["Name"].astype(str).str.strip().str.lower() == trainee_name.lower()) &
-                     (df["Date"] == date_str)]
+            dup = log_df[(log_df["Name"].str.lower() == trainee_name.lower()) & (log_df["Date"] == date_str)]
             if not dup.empty:
                 st.error("⚠️ You have already been logged for today.")
             else:
                 new_row = pd.DataFrame([[code, trainee_name, date_str, time_str]],
                                        columns=["Last4", "Name", "Date", "Time"])
-                df = pd.concat([df, new_row], ignore_index=True)
-
-                try:
-                    df.to_excel(LOG_FILE, index=False)
-                except Exception as e:
-                    st.error(f"❌ Failed to write log file: {e}")
-                else:
-                    st.session_state.cache_bump += 1
-                    st.success(f"✅ {trainee_name} logged at {time_str} on {date_str}")
-                    st.rerun()
-
+                log_df = pd.concat([log_df, new_row], ignore_index=True)
+                save_log(log_df, LOG_FILE)
+                st.success(f"✅ {trainee_name} logged at {time_str} on {date_str}")
+                st.rerun()
         else:
-            # Multiple people share same last4 → let them pick their name
-            st.warning("Multiple trainees share these last 4 digits. Please confirm your name.")
-            options = matches[NAME_COL].astype(str).dropna().unique().tolist()
+            st.warning("Multiple trainees share these last 4 digits.")
+            options = matches[NAME_COL].unique().tolist()
             chosen = st.selectbox("Select your name", options, key="name_select")
-
             if st.button("Confirm", key="confirm_btn"):
                 trainee_name = chosen.strip()
-                now = datetime.now()
                 date_str = now.strftime("%Y-%m-%d")
                 time_str = now.strftime("%H:%M:%S")
-
-                dup = df[(df["Name"].astype(str).str.strip().str.lower() == trainee_name.lower()) &
-                         (df["Date"] == date_str)]
+                dup = log_df[(log_df["Name"].str.lower() == trainee_name.lower()) & (log_df["Date"] == date_str)]
                 if not dup.empty:
                     st.error("⚠️ You have already been logged for today.")
                 else:
                     new_row = pd.DataFrame([[code, trainee_name, date_str, time_str]],
                                            columns=["Last4", "Name", "Date", "Time"])
-                    df = pd.concat([df, new_row], ignore_index=True)
-
-                    try:
-                        df.to_excel(LOG_FILE, index=False)
-                    except Exception as e:
-                        st.error(f"❌ Failed to write log file: {e}")
-                    else:
-                        st.session_state.cache_bump += 1
-                        st.success(f"✅ {trainee_name} logged at {time_str} on {date_str}")
-                        st.rerun()
+                    log_df = pd.concat([log_df, new_row], ignore_index=True)
+                    save_log(log_df, LOG_FILE)
+                    st.success(f"✅ {trainee_name} logged at {time_str} on {date_str}")
+                    st.rerun()
 
 # ---------- Summary ----------
-df = load_log(LOG_FILE, file_mtime(LOG_FILE) + st.session_state.cache_bump)
-st.metric("Total Entries Today", len(df[df["Date"] == datetime.now().strftime("%Y-%m-%d")]))
+st.metric("Total Entries", len(log_df))
 
-# ---------- Admin (download only) ----------
+# ---------- Admin ----------
 st.markdown("---")
 with st.expander("🔐 Admin Login"):
     admin_pass = st.text_input("Enter admin password", type="password", key="admin_password")
     if admin_pass == ADMIN_PASSWORD:
         st.success("Welcome, Admin ✅")
-        if not df.empty and os.path.exists(LOG_FILE):
+        # Filter admin log view based on time
+        if now < today_10am:
+            admin_view = log_df[pd.to_datetime(log_df["Date"] + " " + log_df["Time"]) >= yesterday_7pm]
+        else:
+            admin_view = log_df[pd.to_datetime(log_df["Date"] + " " + log_df["Time"]) >= today_7pm]
+        
+        if not admin_view.empty:
             with open(LOG_FILE, "rb") as f:
                 st.download_button(
                     label="📥 Download Meal Log (Excel)",
                     data=f,
                     file_name="meal_log.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="dl_log_xlsx"
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
         else:
-            st.warning("No entries found yet.")
+            st.warning("No entries in this time window.")
     elif admin_pass:
         st.error("Incorrect password ❌")
-
 
