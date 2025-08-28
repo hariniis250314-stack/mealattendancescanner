@@ -1,8 +1,23 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, time, timedelta
+from datetime import datetime
 import os
 import re
+
+# -------- Timezone (IST) --------
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+    IST = ZoneInfo("Asia/Kolkata")
+except Exception:
+    # Fallback if zoneinfo unavailable
+    try:
+        import pytz
+        IST = pytz.timezone("Asia/Kolkata")
+    except Exception:
+        IST = None  # last resort (will use naive/UTC)
+
+def now_ist():
+    return datetime.now(IST) if IST else datetime.utcnow()
 
 # ---------- Config ----------
 st.set_page_config(page_title="Meal Attendance Scanner", page_icon="🍽️")
@@ -24,7 +39,6 @@ def _auto_find_columns(df: pd.DataFrame):
     norm_map = {_norm(c): c for c in df.columns}
     name_candidates  = ["name", "studentname", "fullname", "traineename"]
     phone_candidates = ["phone", "phonenumber", "mobile", "mobilenumber", "contact", "contactnumber", "number"]
-
     name_col  = next((norm_map[n] for n in name_candidates  if n in norm_map), None)
     phone_col = next((norm_map[n] for n in phone_candidates if n in norm_map), None)
     return df, name_col, phone_col
@@ -59,7 +73,6 @@ except Exception as e:
     st.stop()
 
 master_df, NAME_COL, PHONE_COL = _auto_find_columns(master_raw)
-
 if NAME_COL is None or PHONE_COL is None:
     st.error("❌ Could not detect required columns in the master file.")
     st.stop()
@@ -71,8 +84,7 @@ master_df["__last4__"]  = master_df["__digits__"].apply(lambda x: x[-4:] if len(
 # ---------- Load Log ----------
 df = load_log(LOG_FILE, file_mtime(LOG_FILE) + st.session_state.cache_bump)
 
-# ---------- Input (NO time restriction) ----------
-now = datetime.now()
+# ---------- Input (no time restriction) ----------
 last4 = st.text_input("Enter LAST 4 digits of your phone number", max_chars=4)
 
 if st.button("Submit"):
@@ -86,6 +98,7 @@ if st.button("Submit"):
             st.error("❌ No trainee found with those last 4 digits.")
         elif len(matches) == 1:
             trainee_name = str(matches[NAME_COL].iloc[0]).strip()
+            now = now_ist()
             date_str = now.strftime("%Y-%m-%d")
             time_str = now.strftime("%H:%M:%S")
 
@@ -97,7 +110,6 @@ if st.button("Submit"):
                 new_row = pd.DataFrame([[code, trainee_name, date_str, time_str]],
                                        columns=["Last4", "Name", "Date", "Time"])
                 df = pd.concat([df, new_row], ignore_index=True)
-
                 try:
                     df.to_excel(LOG_FILE, index=False)
                 except Exception as e:
@@ -111,6 +123,7 @@ if st.button("Submit"):
             chosen = st.selectbox("Select your name", matches[NAME_COL].astype(str).unique().tolist())
             if st.button("Confirm"):
                 trainee_name = chosen.strip()
+                now = now_ist()
                 date_str = now.strftime("%Y-%m-%d")
                 time_str = now.strftime("%H:%M:%S")
 
@@ -122,7 +135,6 @@ if st.button("Submit"):
                     new_row = pd.DataFrame([[code, trainee_name, date_str, time_str]],
                                            columns=["Last4", "Name", "Date", "Time"])
                     df = pd.concat([df, new_row], ignore_index=True)
-
                     try:
                         df.to_excel(LOG_FILE, index=False)
                     except Exception as e:
@@ -132,7 +144,7 @@ if st.button("Submit"):
                         st.success(f"✅ {trainee_name} logged at {time_str} on {date_str}")
                         st.rerun()
 
-# ---------- Admin (NO time window, NO cleanup) ----------
+# ---------- Admin (no time window) ----------
 df = load_log(LOG_FILE, file_mtime(LOG_FILE) + st.session_state.cache_bump)
 
 st.markdown("---")
@@ -140,7 +152,7 @@ with st.expander("🔐 Admin Login"):
     admin_pass = st.text_input("Enter admin password", type="password", key="admin_password")
     if admin_pass == ADMIN_PASSWORD:
         st.success("Welcome, Admin ✅")
-        st.dataframe(df)  # show everything
+        st.dataframe(df)
         if not df.empty and os.path.exists(LOG_FILE):
             with open(LOG_FILE, "rb") as f:
                 st.download_button(
