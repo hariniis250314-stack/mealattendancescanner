@@ -71,31 +71,46 @@ master_df["__last4__"]  = master_df["__digits__"].apply(lambda x: x[-4:] if len(
 # ---------- Load Log ----------
 df = load_log(LOG_FILE, file_mtime(LOG_FILE) + st.session_state.cache_bump)
 
-# ---------- Time Restriction ----------
+# ---------- Input (NO time restriction) ----------
 now = datetime.now()
-current_time = now.time()
-allowed_start = time(19, 0)   # 7 PM
-allowed_end   = time(22, 0)   # 10 PM
-
-can_submit = allowed_start <= current_time <= allowed_end
-
-# ---------- Input ----------
 last4 = st.text_input("Enter LAST 4 digits of your phone number", max_chars=4)
 
-if not can_submit:
-    st.warning("⏳ Attendance logging is only allowed between **7:00 PM and 10:00 PM**.")
-else:
-    if st.button("Submit"):
-        code = (last4 or "").strip()
-        if not (len(code) == 4 and code.isdigit()):
-            st.warning("Please enter exactly 4 digits.")
-        else:
-            matches = master_df[master_df["__last4__"] == code]
+if st.button("Submit"):
+    code = (last4 or "").strip()
+    if not (len(code) == 4 and code.isdigit()):
+        st.warning("Please enter exactly 4 digits.")
+    else:
+        matches = master_df[master_df["__last4__"] == code]
 
-            if matches.empty:
-                st.error("❌ No trainee found with those last 4 digits.")
-            elif len(matches) == 1:
-                trainee_name = str(matches[NAME_COL].iloc[0]).strip()
+        if matches.empty:
+            st.error("❌ No trainee found with those last 4 digits.")
+        elif len(matches) == 1:
+            trainee_name = str(matches[NAME_COL].iloc[0]).strip()
+            date_str = now.strftime("%Y-%m-%d")
+            time_str = now.strftime("%H:%M:%S")
+
+            dup = df[(df["Name"].astype(str).str.strip().str.lower() == trainee_name.lower()) &
+                     (df["Date"] == date_str)]
+            if not dup.empty:
+                st.error("⚠️ You have already been logged for today.")
+            else:
+                new_row = pd.DataFrame([[code, trainee_name, date_str, time_str]],
+                                       columns=["Last4", "Name", "Date", "Time"])
+                df = pd.concat([df, new_row], ignore_index=True)
+
+                try:
+                    df.to_excel(LOG_FILE, index=False)
+                except Exception as e:
+                    st.error(f"❌ Failed to write log file: {e}")
+                else:
+                    st.session_state.cache_bump += 1
+                    st.success(f"✅ {trainee_name} logged at {time_str} on {date_str}")
+                    st.rerun()
+        else:
+            st.warning("Multiple trainees share these digits. Please confirm your name.")
+            chosen = st.selectbox("Select your name", matches[NAME_COL].astype(str).unique().tolist())
+            if st.button("Confirm"):
+                trainee_name = chosen.strip()
                 date_str = now.strftime("%Y-%m-%d")
                 time_str = now.strftime("%H:%M:%S")
 
@@ -116,33 +131,8 @@ else:
                         st.session_state.cache_bump += 1
                         st.success(f"✅ {trainee_name} logged at {time_str} on {date_str}")
                         st.rerun()
-            else:
-                st.warning("Multiple trainees share these digits. Please confirm your name.")
-                chosen = st.selectbox("Select your name", matches[NAME_COL].astype(str).unique().tolist())
-                if st.button("Confirm"):
-                    trainee_name = chosen.strip()
-                    date_str = now.strftime("%Y-%m-%d")
-                    time_str = now.strftime("%H:%M:%S")
 
-                    dup = df[(df["Name"].astype(str).str.strip().str.lower() == trainee_name.lower()) &
-                             (df["Date"] == date_str)]
-                    if not dup.empty:
-                        st.error("⚠️ You have already been logged for today.")
-                    else:
-                        new_row = pd.DataFrame([[code, trainee_name, date_str, time_str]],
-                                               columns=["Last4", "Name", "Date", "Time"])
-                        df = pd.concat([df, new_row], ignore_index=True)
-
-                        try:
-                            df.to_excel(LOG_FILE, index=False)
-                        except Exception as e:
-                            st.error(f"❌ Failed to write log file: {e}")
-                        else:
-                            st.session_state.cache_bump += 1
-                            st.success(f"✅ {trainee_name} logged at {time_str} on {date_str}")
-                            st.rerun()
-
-# ---------- Admin ----------
+# ---------- Admin (NO time window, NO cleanup) ----------
 df = load_log(LOG_FILE, file_mtime(LOG_FILE) + st.session_state.cache_bump)
 
 st.markdown("---")
@@ -150,28 +140,8 @@ with st.expander("🔐 Admin Login"):
     admin_pass = st.text_input("Enter admin password", type="password", key="admin_password")
     if admin_pass == ADMIN_PASSWORD:
         st.success("Welcome, Admin ✅")
-        
-        # Time window: yesterday 7 PM to today 10 AM
-        today = now.date()
-        start_time = datetime.combine(today, time(19, 0)) - timedelta(days=1)
-        end_time = datetime.combine(today, time(10, 0))
-
-        def in_range(row):
-            dt = datetime.strptime(f"{row['Date']} {row['Time']}", "%Y-%m-%d %H:%M:%S")
-            return start_time <= dt <= end_time
-
-        filtered_df = df[df.apply(in_range, axis=1)]
-
-        if not filtered_df.empty:
-            st.dataframe(filtered_df)
-
-            # Save filtered log (delete older entries)
-            try:
-                filtered_df.to_excel(LOG_FILE, index=False)
-                st.info("🗑️ Older entries cleared from log.")
-            except Exception as e:
-                st.error(f"❌ Failed to update log file: {e}")
-
+        st.dataframe(df)  # show everything
+        if not df.empty and os.path.exists(LOG_FILE):
             with open(LOG_FILE, "rb") as f:
                 st.download_button(
                     label="📥 Download Meal Log (Excel)",
@@ -180,7 +150,7 @@ with st.expander("🔐 Admin Login"):
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
         else:
-            st.warning("No entries found in allowed time range.")
+            st.warning("No entries found yet.")
     elif admin_pass:
         st.error("Incorrect password ❌")
 
