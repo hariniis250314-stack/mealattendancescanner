@@ -1,23 +1,8 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, time
 import os
 import re
-
-# -------- Timezone (IST) --------
-try:
-    from zoneinfo import ZoneInfo  # Python 3.9+
-    IST = ZoneInfo("Asia/Kolkata")
-except Exception:
-    # Fallback if zoneinfo unavailable
-    try:
-        import pytz
-        IST = pytz.timezone("Asia/Kolkata")
-    except Exception:
-        IST = None  # last resort (will use naive/UTC)
-
-def now_ist():
-    return datetime.now(IST) if IST else datetime.utcnow()
 
 # ---------- Config ----------
 st.set_page_config(page_title="Meal Attendance Scanner", page_icon="🍽️")
@@ -39,6 +24,7 @@ def _auto_find_columns(df: pd.DataFrame):
     norm_map = {_norm(c): c for c in df.columns}
     name_candidates  = ["name", "studentname", "fullname", "traineename"]
     phone_candidates = ["phone", "phonenumber", "mobile", "mobilenumber", "contact", "contactnumber", "number"]
+
     name_col  = next((norm_map[n] for n in name_candidates  if n in norm_map), None)
     phone_col = next((norm_map[n] for n in phone_candidates if n in norm_map), None)
     return df, name_col, phone_col
@@ -73,6 +59,7 @@ except Exception as e:
     st.stop()
 
 master_df, NAME_COL, PHONE_COL = _auto_find_columns(master_raw)
+
 if NAME_COL is None or PHONE_COL is None:
     st.error("❌ Could not detect required columns in the master file.")
     st.stop()
@@ -84,46 +71,30 @@ master_df["__last4__"]  = master_df["__digits__"].apply(lambda x: x[-4:] if len(
 # ---------- Load Log ----------
 df = load_log(LOG_FILE, file_mtime(LOG_FILE) + st.session_state.cache_bump)
 
-# ---------- Input (no time restriction) ----------
+# ---------- Time Restriction ----------
+now = datetime.now()
+current_time = now.time()
+allowed_start = time(12, 0)   # 12 PM
+allowed_end   = time(15, 0)   # 3 PM
+can_submit = allowed_start <= current_time <= allowed_end
+
+# ---------- Student Input ----------
 last4 = st.text_input("Enter LAST 4 digits of your phone number", max_chars=4)
 
-if st.button("Submit"):
-    code = (last4 or "").strip()
-    if not (len(code) == 4 and code.isdigit()):
-        st.warning("Please enter exactly 4 digits.")
-    else:
-        matches = master_df[master_df["__last4__"] == code]
-
-        if matches.empty:
-            st.error("❌ No trainee found with those last 4 digits.")
-        elif len(matches) == 1:
-            trainee_name = str(matches[NAME_COL].iloc[0]).strip()
-            now = now_ist()
-            date_str = now.strftime("%Y-%m-%d")
-            time_str = now.strftime("%H:%M:%S")
-
-            dup = df[(df["Name"].astype(str).str.strip().str.lower() == trainee_name.lower()) &
-                     (df["Date"] == date_str)]
-            if not dup.empty:
-                st.error("⚠️ You have already been logged for today.")
-            else:
-                new_row = pd.DataFrame([[code, trainee_name, date_str, time_str]],
-                                       columns=["Last4", "Name", "Date", "Time"])
-                df = pd.concat([df, new_row], ignore_index=True)
-                try:
-                    df.to_excel(LOG_FILE, index=False)
-                except Exception as e:
-                    st.error(f"❌ Failed to write log file: {e}")
-                else:
-                    st.session_state.cache_bump += 1
-                    st.success(f"✅ {trainee_name} logged at {time_str} on {date_str}")
-                    st.rerun()
+if not can_submit:
+    st.warning("⏳ Attendance logging is only allowed between **12:00 PM and 3:00 PM**.")
+else:
+    if st.button("Submit"):
+        code = (last4 or "").strip()
+        if not (len(code) == 4 and code.isdigit()):
+            st.warning("Please enter exactly 4 digits.")
         else:
-            st.warning("Multiple trainees share these digits. Please confirm your name.")
-            chosen = st.selectbox("Select your name", matches[NAME_COL].astype(str).unique().tolist())
-            if st.button("Confirm"):
-                trainee_name = chosen.strip()
-                now = now_ist()
+            matches = master_df[master_df["__last4__"] == code]
+
+            if matches.empty:
+                st.error("❌ No trainee found with those last 4 digits.")
+            elif len(matches) == 1:
+                trainee_name = str(matches[NAME_COL].iloc[0]).strip()
                 date_str = now.strftime("%Y-%m-%d")
                 time_str = now.strftime("%H:%M:%S")
 
@@ -135,16 +106,32 @@ if st.button("Submit"):
                     new_row = pd.DataFrame([[code, trainee_name, date_str, time_str]],
                                            columns=["Last4", "Name", "Date", "Time"])
                     df = pd.concat([df, new_row], ignore_index=True)
-                    try:
-                        df.to_excel(LOG_FILE, index=False)
-                    except Exception as e:
-                        st.error(f"❌ Failed to write log file: {e}")
+                    df.to_excel(LOG_FILE, index=False)
+                    st.session_state.cache_bump += 1
+                    st.success(f"✅ {trainee_name} logged at {time_str} on {date_str}")
+                    st.rerun()
+            else:
+                st.warning("Multiple trainees share these digits. Please confirm your name.")
+                chosen = st.selectbox("Select your name", matches[NAME_COL].astype(str).unique().tolist())
+                if st.button("Confirm"):
+                    trainee_name = chosen.strip()
+                    date_str = now.strftime("%Y-%m-%d")
+                    time_str = now.strftime("%H:%M:%S")
+
+                    dup = df[(df["Name"].astype(str).str.strip().str.lower() == trainee_name.lower()) &
+                             (df["Date"] == date_str)]
+                    if not dup.empty:
+                        st.error("⚠️ You have already been logged for today.")
                     else:
+                        new_row = pd.DataFrame([[code, trainee_name, date_str, time_str]],
+                                               columns=["Last4", "Name", "Date", "Time"])
+                        df = pd.concat([df, new_row], ignore_index=True)
+                        df.to_excel(LOG_FILE, index=False)
                         st.session_state.cache_bump += 1
                         st.success(f"✅ {trainee_name} logged at {time_str} on {date_str}")
                         st.rerun()
 
-# ---------- Admin (no time window) ----------
+# ---------- Admin ----------
 df = load_log(LOG_FILE, file_mtime(LOG_FILE) + st.session_state.cache_bump)
 
 st.markdown("---")
@@ -152,8 +139,8 @@ with st.expander("🔐 Admin Login"):
     admin_pass = st.text_input("Enter admin password", type="password", key="admin_password")
     if admin_pass == ADMIN_PASSWORD:
         st.success("Welcome, Admin ✅")
-        st.dataframe(df)
         if not df.empty and os.path.exists(LOG_FILE):
+            st.dataframe(df)
             with open(LOG_FILE, "rb") as f:
                 st.download_button(
                     label="📥 Download Meal Log (Excel)",
@@ -165,15 +152,6 @@ with st.expander("🔐 Admin Login"):
             st.warning("No entries found yet.")
     elif admin_pass:
         st.error("Incorrect password ❌")
-    
-    
-if admin_pass == ADMIN_PASSWORD:
-    st.success("Welcome, Admin ✅")
-
-    if st.button("🗑️ Clear All Logs"):
-        df = pd.DataFrame(columns=["Last4", "Name", "Date", "Time"])
-        df.to_excel(LOG_FILE, index=False)
-        st.success("✅ All logs cleared successfully.")
 
 
 
