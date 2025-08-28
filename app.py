@@ -165,13 +165,16 @@ with st.expander("🔐 Admin Login"):
             st.warning("No entries found yet.")
     elif admin_pass:
         st.error("Incorrect password ❌")
-        if admin_pass == ADMIN_PASSWORD:
+    
+    
+if admin_pass == ADMIN_PASSWORD:
     st.success("Welcome, Admin ✅")
 
     if st.button("🗑️ Clear All Logs"):
         df = pd.DataFrame(columns=["Last4", "Name", "Date", "Time"])
         df.to_excel(LOG_FILE, index=False)
         st.success("✅ All logs cleared successfully.")
+
 
 
 
